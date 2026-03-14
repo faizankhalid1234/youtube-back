@@ -1,0 +1,25 @@
+{
+  "name": "youtube-clone-backend",
+  "version": "1.0.0",
+  "description": "YouTube Clone Backend API",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "check-db": "node check-mongodb.js",
+    "kill-port": "node kill-port.js",
+    "seed": "node seed-videos.js",
+    "clear-db": "node clear-database.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "mongoose": "^8.0.3",
+    "dotenv": "^16.3.1",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
