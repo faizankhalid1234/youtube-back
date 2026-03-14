@@ -1,8 +1,8 @@
 // Script to clear all videos from database
-require('dotenv').config()
-const mongoose = require('mongoose')
+require('dotenv').config();
+const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/youtube-clone'
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/youtube-clone';
 
 // Video Schema
 const videoSchema = new mongoose.Schema({
@@ -30,47 +30,47 @@ const videoSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
-})
+});
 
-const Video = mongoose.model('Video', videoSchema)
+const Video = mongoose.model('Video', videoSchema);
 
 async function clearDatabase() {
   try {
-    console.log('🔌 Connecting to MongoDB...')
-    console.log('Connection URI:', MONGODB_URI.replace(/\/\/.*@/, '//***:***@'))
-    
+    console.log('🔌 Connecting to MongoDB...');
+    console.log('Connection URI:', MONGODB_URI.replace(/\/\/.*@/, '//***:***@'));
+
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 10000,
-    })
-    console.log('✅ Connected to MongoDB!')
-    console.log('Database:', mongoose.connection.name)
+    });
+    console.log('✅ Connected to MongoDB!');
+    console.log('Database:', mongoose.connection.name);
 
     // Count existing videos
-    const countBefore = await Video.countDocuments()
-    console.log(`\n📊 Found ${countBefore} videos in database`)
+    const countBefore = await Video.countDocuments();
+    console.log(`\n📊 Found ${countBefore} videos in database`);
 
     if (countBefore === 0) {
-      console.log('✅ Database is already empty!')
-      process.exit(0)
+      console.log('✅ Database is already empty!');
+      process.exit(0);
     }
 
     // Delete all videos
-    console.log('\n🗑️  Deleting all videos...')
-    const result = await Video.deleteMany({})
-    console.log(`✅ Deleted ${result.deletedCount} videos successfully!`)
+    console.log('\n🗑️  Deleting all videos...');
+    const result = await Video.deleteMany({});
+    console.log(`✅ Deleted ${result.deletedCount} videos successfully!`);
 
     // Verify deletion
-    const countAfter = await Video.countDocuments()
-    console.log(`\n📊 Remaining videos: ${countAfter}`)
+    const countAfter = await Video.countDocuments();
+    console.log(`\n📊 Remaining videos: ${countAfter}`);
 
-    console.log('\n🎉 Database cleared successfully!')
-    console.log('💡 Run "npm run seed" to add sample videos again')
-    
-    process.exit(0)
+    console.log('\n🎉 Database cleared successfully!');
+    console.log('💡 Run "npm run seed" to add sample videos again');
+
+    process.exit(0);
   } catch (error) {
-    console.error('❌ Error clearing database:', error.message)
-    process.exit(1)
+    console.error('❌ Error clearing database:', error.message);
+    process.exit(1);
   }
 }
 
-clearDatabase()
+clearDatabase();
