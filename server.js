@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
 
+const isVercel = process.env.VERCEL === '1';
 const app = express();
 
 // Middleware
@@ -13,123 +14,91 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files with proper headers for video streaming
-app.use(
-  '/uploads',
-  (req, res, next) => {
-    // Enable Range requests for video seeking (YouTube-style)
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    next();
-  },
-  express.static(path.join(__dirname, 'uploads'), {
-    setHeaders: (res, filePath) => {
-      // Set proper MIME types for videos and images
-      const ext = path.extname(filePath).toLowerCase();
-      const mimeTypes = {
-        '.mp4': 'video/mp4',
-        '.webm': 'video/webm',
-        '.ogg': 'video/ogg',
-        '.mov': 'video/quicktime',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-      };
-      if (mimeTypes[ext]) {
-        res.setHeader('Content-Type', mimeTypes[ext]);
-      }
+// Serve static files - only locally (Vercel ignores express.static)
+if (!isVercel) {
+  app.use(
+    '/uploads',
+    (req, res, next) => {
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      next();
     },
-  })
-);
+    express.static(path.join(__dirname, 'uploads'), {
+      setHeaders: (res, filePath) => {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes = {
+          '.mp4': 'video/mp4',
+          '.webm': 'video/webm',
+          '.ogg': 'video/ogg',
+          '.mov': 'video/quicktime',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+          '.webp': 'image/webp',
+        };
+        if (mimeTypes[ext]) {
+          res.setHeader('Content-Type', mimeTypes[ext]);
+        }
+      },
+    })
+  );
+}
 
-// MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/youtube-clone';
-
-// MongoDB connection options
+// MongoDB - serverless-friendly: lazy connect, no infinite retry on Vercel
+const MONGODB_URI =
+  process.env.MONGODB_URI ||
+  (isVercel ? '' : 'mongodb://localhost:27017/youtube-clone');
 const mongooseOptions = {
-  serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-  socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
 };
 
-// Connect to MongoDB
-const connectDB = async () => {
-  try {
-    console.log('Attempting to connect to MongoDB...');
-    console.log('Connection URI:', MONGODB_URI.replace(/\/\/.*@/, '//***:***@')); // Hide credentials if any
-
-    await mongoose.connect(MONGODB_URI, mongooseOptions);
-
-    console.log('✅ MongoDB connected successfully!');
-    console.log('Database:', mongoose.connection.name);
-    console.log('Host:', mongoose.connection.host);
-    console.log('Port:', mongoose.connection.port);
-
-    await seedSampleVideos();
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    console.error('\n📝 Troubleshooting tips:');
-    console.error('1. Make sure MongoDB is installed and running');
-    console.error('2. Check if MongoDB service is started:');
-    console.error('   - Windows: Check Services or run "mongod"');
-    console.error('   - Mac/Linux: Run "mongod" or "brew services start mongodb-community"');
-    console.error('3. Verify connection string:', MONGODB_URI);
-    console.error('4. Try connecting manually: mongosh "mongodb://localhost:27017"');
-    console.error('\n⏳ Retrying connection in 5 seconds...\n');
-
-    // Retry connection after 5 seconds
-    setTimeout(connectDB, 5000);
+async function connectDB() {
+  if (mongoose.connection.readyState === 1) return;
+  if (!MONGODB_URI) {
+    const err = new Error(
+      isVercel
+        ? 'MONGODB_URI is not set. Add it in Vercel Project Settings → Environment Variables.'
+        : 'MONGODB_URI is not set. Create a .env file with MONGODB_URI=your_connection_string'
+    );
+    throw err;
   }
-};
+  try {
+    await mongoose.connect(MONGODB_URI, mongooseOptions);
+    if (!isVercel) {
+      console.log('✅ MongoDB connected!');
+      await seedSampleVideos();
+    }
+  } catch (error) {
+    console.error('❌ MongoDB error:', error.message);
+    if (!isVercel) {
+      console.error('⏳ Retrying in 5 seconds...');
+      setTimeout(connectDB, 5000);
+    }
+    throw error;
+  }
+}
 
-// Handle connection events
-mongoose.connection.on('disconnected', () => {
-  console.log('⚠️  MongoDB disconnected. Attempting to reconnect...');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB error:', err);
-});
-
-mongoose.connection.on('reconnected', () => {
-  console.log('✅ MongoDB reconnected!');
-});
-
-// Start connection
-connectDB();
+if (!isVercel) {
+  mongoose.connection.on('disconnected', () => console.log('⚠️ MongoDB disconnected'));
+  mongoose.connection.on('error', (err) => console.error('❌ MongoDB error:', err));
+  mongoose.connection.on('reconnected', () => console.log('✅ MongoDB reconnected'));
+  connectDB();
+}
 
 // Video Schema
 const videoSchema = new mongoose.Schema({
-  title: {
-    type: String,
-    required: true,
-  },
-  description: {
-    type: String,
-    default: '',
-  },
-  videoUrl: {
-    type: String,
-    required: true,
-  },
-  thumbnail: {
-    type: String,
-    default: '',
-  },
-  views: {
-    type: Number,
-    default: 0,
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  videoUrl: { type: String, required: true },
+  thumbnail: { type: String, default: '' },
+  views: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now },
 });
 
 const Video = mongoose.model('Video', videoSchema);
 
-// Sample videos (Google's free test videos - play without upload)
 const sampleVideos = [
   {
     title: "Nature's Beauty - Mountain Landscape",
@@ -207,78 +176,52 @@ async function seedSampleVideos() {
     const count = await Video.countDocuments();
     if (count === 0) {
       await Video.insertMany(sampleVideos);
-      console.log('📹 Added 8 sample videos! Refresh the page to see them.');
+      console.log('📹 Added 8 sample videos!');
     }
   } catch (err) {
     console.error('Seed error:', err.message);
   }
 }
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-const videosDir = path.join(uploadsDir, 'videos');
-const thumbnailsDir = path.join(uploadsDir, 'thumbnails');
+// Create uploads dirs only locally
+let videoStorage, thumbnailStorage;
+if (!isVercel) {
+  const uploadsDir = path.join(__dirname, 'uploads');
+  const videosDir = path.join(uploadsDir, 'videos');
+  const thumbnailsDir = path.join(uploadsDir, 'thumbnails');
+  [uploadsDir, videosDir, thumbnailsDir].forEach((dir) => {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  });
 
-[uploadsDir, videosDir, thumbnailsDir].forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  videoStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, videosDir),
+    filename: (req, file, cb) =>
+      cb(null, 'video-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+  });
+  thumbnailStorage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, thumbnailsDir),
+    filename: (req, file, cb) =>
+      cb(null, 'thumbnail-' + Date.now() + '-' + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+  });
+}
+
+// Middleware: ensure DB connected (for Vercel cold starts)
+const ensureDB = async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(503).json({
+      message: 'Database unavailable',
+      error: isVercel ? undefined : err.message,
+    });
   }
-});
-
-// Multer configuration for video upload
-const videoStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, videosDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
-// Multer configuration for thumbnail upload
-const thumbnailStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, thumbnailsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, 'thumbnail-' + uniqueSuffix + path.extname(file.originalname));
-  },
-});
-
-const uploadVideo = multer({
-  storage: videoStorage,
-  limits: {
-    fileSize: 500 * 1024 * 1024, // 500MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('video/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only video files are allowed'));
-    }
-  },
-});
-
-const uploadThumbnail = multer({
-  storage: thumbnailStorage,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  },
-});
+};
 
 // Routes
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-// Seed sample videos (call this to add demo videos)
-app.post('/api/videos/seed', async (req, res) => {
+app.post('/api/videos/seed', ensureDB, async (req, res) => {
   try {
     const added = await Video.insertMany(sampleVideos);
     res.json({ message: `Added ${added.length} sample videos!`, count: added.length });
@@ -287,8 +230,7 @@ app.post('/api/videos/seed', async (req, res) => {
   }
 });
 
-// Get all videos
-app.get('/api/videos', async (req, res) => {
+app.get('/api/videos', ensureDB, async (req, res) => {
   try {
     const videos = await Video.find().sort({ createdAt: -1 });
     res.json(videos);
@@ -297,8 +239,7 @@ app.get('/api/videos', async (req, res) => {
   }
 });
 
-// Search videos
-app.get('/api/videos/search', async (req, res) => {
+app.get('/api/videos/search', ensureDB, async (req, res) => {
   try {
     const query = req.query.q || '';
     const videos = await Video.find({
@@ -313,129 +254,103 @@ app.get('/api/videos/search', async (req, res) => {
   }
 });
 
-// Get single video
-app.get('/api/videos/:id', async (req, res) => {
+app.get('/api/videos/:id', ensureDB, async (req, res) => {
   try {
     const video = await Video.findById(req.params.id);
-    if (!video) {
-      return res.status(404).json({ message: 'Video not found' });
-    }
+    if (!video) return res.status(404).json({ message: 'Video not found' });
     res.json(video);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// Upload video - handles both video and thumbnail files
-app.post(
-  '/api/videos/upload',
-  (req, res, next) => {
-    const upload = multer({
-      storage: {
-        _handleFile: function (req, file, cb) {
-          if (file.fieldname === 'video') {
-            videoStorage._handleFile(req, file, cb);
-          } else if (file.fieldname === 'thumbnail') {
-            thumbnailStorage._handleFile(req, file, cb);
-          }
-        },
-        _removeFile: function (req, file, cb) {
-          if (file.fieldname === 'video') {
-            videoStorage._removeFile(req, file, cb);
-          } else if (file.fieldname === 'thumbnail') {
-            thumbnailStorage._removeFile(req, file, cb);
-          }
-        },
-      },
-      limits: {
-        fileSize: 500 * 1024 * 1024, // 500MB limit
-      },
-      fileFilter: (req, file, cb) => {
-        if (file.fieldname === 'video' && file.mimetype.startsWith('video/')) {
-          cb(null, true);
-        } else if (file.fieldname === 'thumbnail' && file.mimetype.startsWith('image/')) {
-          cb(null, true);
-        } else {
-          cb(new Error('Invalid file type'));
-        }
-      },
-    }).fields([
-      { name: 'video', maxCount: 1 },
-      { name: 'thumbnail', maxCount: 1 },
-    ]);
-
-    upload(req, res, (err) => {
-      if (err) {
-        return res.status(400).json({ message: err.message });
-      }
-      next();
+// Upload - not supported on Vercel (ephemeral filesystem)
+if (isVercel) {
+  app.post('/api/videos/upload', (req, res) => {
+    res.status(501).json({
+      message: 'Video upload is not supported on Vercel. Use a local server or cloud storage (e.g. S3, Cloudinary).',
     });
-  },
-  async (req, res) => {
-    try {
-      if (!req.files || !req.files.video) {
-        return res.status(400).json({ message: 'Video file is required' });
+  });
+} else {
+  app.post(
+    '/api/videos/upload',
+    (req, res, next) => {
+      const upload = multer({
+        storage: {
+          _handleFile(req, file, cb) {
+            file.fieldname === 'video'
+              ? videoStorage._handleFile(req, file, cb)
+              : thumbnailStorage._handleFile(req, file, cb);
+          },
+          _removeFile(req, file, cb) {
+            file.fieldname === 'video'
+              ? videoStorage._removeFile(req, file, cb)
+              : thumbnailStorage._removeFile(req, file, cb);
+          },
+        },
+        limits: { fileSize: 500 * 1024 * 1024 },
+        fileFilter: (req, file, cb) => {
+          if (
+            (file.fieldname === 'video' && file.mimetype.startsWith('video/')) ||
+            (file.fieldname === 'thumbnail' && file.mimetype.startsWith('image/'))
+          )
+            cb(null, true);
+          else cb(new Error('Invalid file type'));
+        },
+      }).fields([
+        { name: 'video', maxCount: 1 },
+        { name: 'thumbnail', maxCount: 1 },
+      ]);
+
+      upload(req, res, (err) => (err ? res.status(400).json({ message: err.message }) : next()));
+    },
+    async (req, res) => {
+      try {
+        if (!req.files?.video) return res.status(400).json({ message: 'Video file is required' });
+        const v = req.files.video[0];
+        const t = req.files.thumbnail?.[0];
+        const video = new Video({
+          title: req.body.title || 'Untitled',
+          description: req.body.description || '',
+          videoUrl: `/uploads/videos/${v.filename}`,
+          thumbnail: t ? `/uploads/thumbnails/${t.filename}` : '',
+        });
+        await video.save();
+        res.status(201).json(video);
+      } catch (error) {
+        res.status(500).json({ message: error.message });
       }
-
-      const videoFile = req.files.video[0];
-      const thumbnailFile = req.files.thumbnail ? req.files.thumbnail[0] : null;
-
-      const videoUrl = `/uploads/videos/${videoFile.filename}`;
-      const thumbnailUrl = thumbnailFile ? `/uploads/thumbnails/${thumbnailFile.filename}` : '';
-
-      const video = new Video({
-        title: req.body.title,
-        description: req.body.description || '',
-        videoUrl: videoUrl,
-        thumbnail: thumbnailUrl,
-      });
-
-      await video.save();
-      res.status(201).json(video);
-    } catch (error) {
-      res.status(500).json({ message: error.message });
     }
-  }
-);
+  );
+}
 
-// Increment view count
-app.put('/api/videos/:id/views', async (req, res) => {
+app.put('/api/videos/:id/views', ensureDB, async (req, res) => {
   try {
     const video = await Video.findByIdAndUpdate(
       req.params.id,
       { $inc: { views: 1 } },
       { new: true }
     );
-    if (!video) {
-      return res.status(404).json({ message: 'Video not found' });
-    }
+    if (!video) return res.status(404).json({ message: 'Video not found' });
     res.json(video);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-const PORT = process.env.PORT || 5000;
+// Export for Vercel (required)
+module.exports = app;
 
-// Start server with error handling for port conflicts
-const server = app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📡 API available at http://localhost:${PORT}`);
-});
-
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use!`);
-    console.error('\n📝 Solutions:');
-    console.error(`1. Kill the process using port ${PORT}:`);
-    console.error(`   Windows: netstat -ano | findstr :${PORT}`);
-    console.error(`   Then: taskkill /PID <PID> /F`);
-    console.error(`   Mac/Linux: lsof -ti:${PORT} | xargs kill -9`);
-    console.error(`\n2. Or use a different port by setting PORT in .env file`);
-    console.error(`   Example: PORT=5001`);
+// Local: start server
+if (!isVercel) {
+  const PORT = process.env.PORT || 5000;
+  const server = app.listen(PORT, () => {
+    console.log(`✅ Server on http://localhost:${PORT}`);
+  });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`❌ Port ${PORT} in use. Use different PORT or run: npm run kill-port`);
+    }
     process.exit(1);
-  } else {
-    console.error('❌ Server error:', error);
-    process.exit(1);
-  }
-});
+  });
+}
